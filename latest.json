@@ -1,0 +1,11 @@
+{
+  "diamond_index": {
+    "name": "钻石底指数",
+    "name_en": "Diamond Bottom Index",
+    "description": "基于200日和850日双均线偏离度的底部识别指标。新增定投线用于在钻石底之前开始分批布局，源自韭菜老猫指标的A股适配版本。",
+    "formula": "(现价 / MA200) * sqrt(现价 / MA850)",
+    "threshold_desc": "钻石底 < 5%分位数 | 定投区 5%~定投线 | 合理 定投线~90% | 偏热 90%~95% | 过热 > 95%",
+    "version": "2.1",
+    "data_source": "iFinD"
+  }
+}
