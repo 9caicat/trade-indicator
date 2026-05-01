@@ -1,0 +1,633 @@
+/**
+ * 韭菜老猫钻石底指数 - 前端应用
+ * 功能：
+ * 1. 加载JSON数据并渲染页面
+ * 2. 绘制钻石底指数走势图（ECharts）
+ * 3. 多指数对比图
+ * 4. 历史底部信号表格
+ * 5. 响应式交互
+ */
+
+// ============ 全局状态 ============
+const state = {
+    historyData: null,    // 历史数据 indicators.json
+    latestData: null,     // 最新数据 latest.json
+    metaData: null,       // 元数据 markets.json
+    selectedIndex: '上证指数',  // 当前选中的指数
+    timeRange: '1y',      // 当前时间范围
+    mainChart: null,      // 主图表实例
+    compareChart: null,   // 对比图表实例
+};
+
+// 指数代码映射（用于显示）
+const INDEX_CODES = {
+    '上证指数': '000001.SH',
+    '沪深300': '000300.SH',
+    '创业板指': '399006.SZ',
+    '中证500': '000905.SH',
+    '科创50': '000688.SH',
+};
+
+// ============ 工具函数 ============
+
+/**
+ * 加载JSON文件
+ */
+async function loadJSON(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to load ${url}: ${response.status}`);
+    }
+    return response.json();
+}
+
+/**
+ * 格式化日期
+ */
+function formatDate(dateStr) {
+    const d = new Date(dateStr);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * 获取状态样式类名
+ */
+function getStatusClass(status) {
+    const map = {
+        '钻石底': 'status-diamond_bottom',
+        '定投区': 'status-dca',
+        '合理': 'status-equilibrium',
+        '偏热': 'status-warm',
+        '过热': 'status-hot',
+        '极热': 'status-extreme_hot',
+    };
+    return map[status] || 'status-equilibrium';
+}
+
+/**
+ * 过滤指定时间范围的数据
+ */
+function filterByRange(data, range) {
+    if (range === 'all') return data;
+    
+    const now = new Date();
+    const ranges = {
+        '1y': 365,
+        '3y': 365 * 3,
+        '5y': 365 * 5,
+    };
+    
+    const days = ranges[range] || 365;
+    const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    
+    return data.filter(d => new Date(d.date) >= cutoff);
+}
+
+/**
+ * 计算距钻石底阈值的空间（百分比）
+ */
+function calcDistanceSpace(current, threshold) {
+    return ((current - threshold) / threshold * 100).toFixed(1);
+}
+
+// ============ 渲染函数 ============
+
+/**
+ * 渲染指数卡片
+ */
+function renderCards() {
+    const grid = document.getElementById('cardsGrid');
+    const { data, update_time } = state.latestData;
+    
+    // 更新头部时间
+    document.getElementById('updateTime').textContent = `更新时间: ${update_time}`;
+    
+    grid.innerHTML = Object.entries(data).map(([name, item]) => {
+        const statusClass = getStatusClass(item.status);
+        const distanceSpace = calcDistanceSpace(item.diamond_index, item.thresholds.diamond_bottom);
+        const isOverheated = ['偏热', '过热', '极热'].includes(item.status);
+        const distancePrefix = isOverheated ? '+' : '';
+        
+        return `
+            <div class="index-card ${statusClass}" data-index="${name}">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">${name}</div>
+                        <div class="card-code">${INDEX_CODES[name] || ''}</div>
+                    </div>
+                    <span class="card-status">${item.status}</span>
+                </div>
+                <div class="card-value" style="color: ${item.status_color}">
+                    ${item.diamond_index.toFixed(4)}
+                </div>
+                <div class="card-details">
+                    <div class="detail-item">
+                        <span class="detail-label">收盘价</span>
+                        <span class="detail-value">${item.close.toLocaleString('zh-CN')}</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">钻石底阈值</span>
+                        <span class="detail-value">${item.thresholds.diamond_bottom}</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">距底空间</span>
+                        <span class="detail-value" style="color: ${isOverheated ? 'var(--danger)' : 'var(--success)'}">
+                            ${distancePrefix}${distanceSpace}%
+                        </span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">动量</span>
+                        <span class="detail-value">${item.momentum_label}</span>
+                    </div>
+                </div>
+                <div class="card-footer">
+                    <div class="percentile-bar">
+                        <div class="percentile-fill" style="width: ${item.percentile}%"></div>
+                    </div>
+                    <span class="percentile-text">${item.percentile}% 分位</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    // 绑定卡片点击事件
+    grid.querySelectorAll('.index-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const indexName = card.dataset.index;
+            selectIndex(indexName);
+        });
+    });
+}
+
+/**
+ * 渲染指数选择器按钮
+ */
+function renderIndexSelector() {
+    const selector = document.getElementById('indexSelector');
+    const indices = Object.keys(state.latestData.data);
+    
+    selector.innerHTML = indices.map(name => `
+        <button class="index-btn ${name === state.selectedIndex ? 'active' : ''}" data-index="${name}">
+            ${name}
+        </button>
+    `).join('');
+    
+    // 绑定点击事件
+    selector.querySelectorAll('.index-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            selectIndex(btn.dataset.index);
+        });
+    });
+}
+
+/**
+ * 选择指数
+ */
+function selectIndex(name) {
+    state.selectedIndex = name;
+    
+    // 更新按钮状态
+    document.querySelectorAll('.index-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.index === name);
+    });
+    
+    // 更新图表
+    renderMainChart();
+}
+
+/**
+ * 渲染主走势图
+ */
+function renderMainChart() {
+    const chartDom = document.getElementById('mainChart');
+    if (!state.mainChart) {
+        state.mainChart = echarts.init(chartDom, 'dark');
+    }
+    
+    const indexName = state.selectedIndex;
+    const history = state.historyData[indexName] || [];
+    const latest = state.latestData.data[indexName];
+    
+    if (!history.length) {
+        state.mainChart.setOption({
+            title: { text: '暂无数据', left: 'center', top: 'center' }
+        }, true);
+        return;
+    }
+    
+    // 过滤时间范围
+    const filtered = filterByRange(history, state.timeRange);
+    
+    const dates = filtered.map(d => d.date);
+    const diValues = filtered.map(d => d.diamond_index);
+    const closeValues = filtered.map(d => d.close);
+    
+    // 阈值线（颜色与状态提示统一）
+    const thresholds = latest.thresholds;
+    const thresholdLines = [
+        { yAxis: thresholds.diamond_bottom, name: '钻石底', color: '#00c853', lineStyle: { type: 'dashed', width: 2 } },
+        { yAxis: thresholds.dca_line, name: '定投区', color: '#64dd17', lineStyle: { type: 'dashed', width: 1 } },
+        { yAxis: thresholds.equilibrium, name: '合理', color: '#2979ff', lineStyle: { type: 'dashed', width: 1 } },
+        { yAxis: thresholds.warm, name: '偏热', color: '#ff9100', lineStyle: { type: 'dashed', width: 1 } },
+        { yAxis: thresholds.hot, name: '过热', color: '#ff1744', lineStyle: { type: 'dashed', width: 2 } },
+    ];
+    
+    // 标记钻石底区域
+    const diamondBottomRegions = [];
+    let inRegion = false;
+    let regionStart = null;
+    
+    for (let i = 0; i < filtered.length; i++) {
+        if (filtered[i].diamond_index <= thresholds.diamond_bottom) {
+            if (!inRegion) {
+                inRegion = true;
+                regionStart = filtered[i].date;
+            }
+        } else {
+            if (inRegion) {
+                diamondBottomRegions.push({
+                    xAxis: regionStart,
+                    xAxisEnd: filtered[i].date,
+                });
+                inRegion = false;
+            }
+        }
+    }
+    if (inRegion) {
+        diamondBottomRegions.push({
+            xAxis: regionStart,
+            xAxisEnd: filtered[filtered.length - 1].date,
+        });
+    }
+    
+    const option = {
+        backgroundColor: 'transparent',
+        animation: true,
+        animationDuration: 800,
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: { type: 'cross' },
+            backgroundColor: 'rgba(17, 24, 39, 0.95)',
+            borderColor: '#2d3748',
+            textStyle: { color: '#e2e8f0' },
+            formatter: function(params) {
+                let html = `<div style="font-weight:700;margin-bottom:6px">${params[0].axisValue}</div>`;
+                params.forEach(p => {
+                    const color = p.color;
+                    html += `<div style="display:flex;align-items:center;gap:8px;margin:3px 0">
+                        <span style="width:10px;height:10px;border-radius:50%;background:${color}"></span>
+                        <span style="flex:1">${p.seriesName}:</span>
+                        <span style="font-weight:600">${typeof p.value === 'number' ? p.value.toFixed(4) : p.value}</span>
+                    </div>`;
+                });
+                return html;
+            }
+        },
+        legend: {
+            data: ['钻石底指数', '收盘价'],
+            top: 0,
+            textStyle: { color: '#94a3b8' },
+        },
+        grid: {
+            left: 60,
+            right: 60,
+            top: 50,
+            bottom: 60,
+        },
+        xAxis: {
+            type: 'category',
+            data: dates,
+            axisLine: { lineStyle: { color: '#2d3748' } },
+            axisLabel: { color: '#64748b', formatter: (val) => val.slice(0, 7) },
+        },
+        yAxis: [
+            {
+                type: 'value',
+                name: '钻石底指数',
+                position: 'left',
+                axisLine: { lineStyle: { color: '#2d3748' } },
+                axisLabel: { color: '#64748b' },
+                splitLine: { lineStyle: { color: '#1a2235' } },
+            },
+            {
+                type: 'value',
+                name: '收盘价',
+                position: 'right',
+                axisLine: { lineStyle: { color: '#2d3748' } },
+                axisLabel: { color: '#64748b' },
+                splitLine: { show: false },
+            }
+        ],
+        series: [
+            {
+                name: '钻石底指数',
+                type: 'line',
+                data: diValues,
+                smooth: true,
+                symbol: 'none',
+                lineStyle: { width: 2.5, color: '#3b82f6' },
+                areaStyle: {
+                    color: {
+                        type: 'linear',
+                        x: 0, y: 0, x2: 0, y2: 1,
+                        colorStops: [
+                            { offset: 0, color: 'rgba(59, 130, 246, 0.3)' },
+                            { offset: 1, color: 'rgba(59, 130, 246, 0)' }
+                        ]
+                    }
+                },
+                markLine: {
+                    silent: true,
+                    symbol: 'none',
+                    data: thresholdLines.map(t => ({
+                        yAxis: t.yAxis,
+                        name: t.name,
+                        lineStyle: { ...t.lineStyle, color: t.color },
+                        label: {
+                            formatter: t.name,
+                            position: 'insideEndTop',
+                            color: t.color,
+                            fontSize: 11,
+                        }
+                    })),
+                },
+                markArea: {
+                    silent: true,
+                    data: diamondBottomRegions.map(r => [{
+                        xAxis: r.xAxis,
+                        itemStyle: { color: 'rgba(0, 200, 83, 0.08)' },
+                    }, {
+                        xAxis: r.xAxisEnd,
+                    }]),
+                },
+            },
+            {
+                name: '收盘价',
+                type: 'line',
+                yAxisIndex: 1,
+                data: closeValues,
+                smooth: true,
+                symbol: 'none',
+                lineStyle: { width: 1.5, color: '#f59e0b', opacity: 0.6 },
+            }
+        ],
+        dataZoom: [
+            {
+                type: 'inside',
+                start: 0,
+                end: 100,
+            },
+            {
+                type: 'slider',
+                start: 0,
+                end: 100,
+                height: 24,
+                bottom: 10,
+                borderColor: '#2d3748',
+                backgroundColor: '#1a2235',
+                fillerColor: 'rgba(59, 130, 246, 0.2)',
+                handleStyle: { color: '#3b82f6' },
+                textStyle: { color: '#64748b' },
+            }
+        ],
+    };
+    
+    state.mainChart.setOption(option, true);
+}
+
+/**
+ * 渲染多指数对比图
+ */
+function renderCompareChart() {
+    const chartDom = document.getElementById('compareChart');
+    if (!state.compareChart) {
+        state.compareChart = echarts.init(chartDom, 'dark');
+    }
+    
+    const indices = Object.keys(state.historyData);
+    const colors = ['#3b82f6', '#f59e0b', '#ef4444', '#10b981', '#8b5cf6'];
+    
+    // 使用最近1年的数据
+    const series = indices.map((name, i) => {
+        const history = state.historyData[name] || [];
+        const filtered = filterByRange(history, '1y');
+        
+        return {
+            name: name,
+            type: 'line',
+            data: filtered.map(d => [d.date, d.diamond_index]),
+            smooth: true,
+            symbol: 'none',
+            lineStyle: { width: 2, color: colors[i % colors.length] },
+        };
+    });
+    
+    // 获取所有日期
+    let allDates = [];
+    indices.forEach(name => {
+        const history = state.historyData[name] || [];
+        const filtered = filterByRange(history, '1y');
+        allDates = [...allDates, ...filtered.map(d => d.date)];
+    });
+    allDates = [...new Set(allDates)].sort();
+    
+    const option = {
+        backgroundColor: 'transparent',
+        animation: true,
+        tooltip: {
+            trigger: 'axis',
+            backgroundColor: 'rgba(17, 24, 39, 0.95)',
+            borderColor: '#2d3748',
+            textStyle: { color: '#e2e8f0' },
+            formatter: function(params) {
+                let html = `<div style="font-weight:700;margin-bottom:6px">${params[0].axisValue}</div>`;
+                params.forEach(p => {
+                    const marker = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.color};margin-right:6px"></span>`;
+                    html += `<div style="margin:3px 0">${marker}${p.seriesName}: <strong>${p.value.toFixed(4)}</strong></div>`;
+                });
+                return html;
+            }
+        },
+        legend: {
+            data: indices,
+            top: 0,
+            textStyle: { color: '#94a3b8' },
+        },
+        grid: {
+            left: 60,
+            right: 40,
+            top: 50,
+            bottom: 60,
+        },
+        xAxis: {
+            type: 'category',
+            data: allDates,
+            axisLine: { lineStyle: { color: '#2d3748' } },
+            axisLabel: { color: '#64748b', formatter: (val) => val.slice(0, 7) },
+        },
+        yAxis: {
+            type: 'value',
+            name: '钻石底指数',
+            axisLine: { lineStyle: { color: '#2d3748' } },
+            axisLabel: { color: '#64748b' },
+            splitLine: { lineStyle: { color: '#1a2235' } },
+        },
+        series: series,
+        dataZoom: [
+            { type: 'inside', start: 0, end: 100 },
+            {
+                type: 'slider',
+                start: 0,
+                end: 100,
+                height: 24,
+                bottom: 10,
+                borderColor: '#2d3748',
+                backgroundColor: '#1a2235',
+                fillerColor: 'rgba(59, 130, 246, 0.2)',
+                handleStyle: { color: '#3b82f6' },
+                textStyle: { color: '#64748b' },
+            }
+        ],
+    };
+    
+    state.compareChart.setOption(option, true);
+}
+
+/**
+ * 渲染历史信号表格
+ */
+function renderSignalsTable() {
+    // 历史底部事件数据
+    const events = [
+        { name: '2018年10月大底', data: { '上证指数': 0.7152, '沪深300': 0.748, '创业板指': 0.556, '中证500': 0.57, '科创50': null } },
+        { name: '2020年3月疫情底', data: { '上证指数': 0.846, '沪深300': 0.89, '创业板指': 1.089, '中证500': 0.904, '科创50': null } },
+        { name: '2022年4月政策底', data: { '上证指数': 0.789, '沪深300': 0.743, '创业板指': 0.655, '中证500': 0.714, '科创50': null } },
+        { name: '2022年10月市场底', data: { '上证指数': 0.84, '沪深300': 0.739, '创业板指': 0.779, '中证500': 0.848, '科创50': null } },
+        { name: '2024年2月流动性底', data: { '上证指数': 0.786, '沪深300': 0.733, '创业板指': 0.579, '中证500': 0.656, '科创50': 0.553 } },
+    ];
+    
+    const tbody = document.querySelector('#signalsTable tbody');
+    const indices = ['上证指数', '沪深300', '创业板指', '中证500', '科创50'];
+    
+    tbody.innerHTML = events.map(event => {
+        const cells = indices.map(idx => {
+            const val = event.data[idx];
+            if (val === null) return '<td class="signal-no">—</td>';
+            
+            // 获取该指数的阈值
+            const threshold = state.latestData?.data?.[idx]?.thresholds?.diamond_bottom || 0.75;
+            const isSignal = val <= threshold;
+            
+            return `<td class="${isSignal ? 'signal-yes' : 'signal-no'}">
+                ${isSignal ? '✓ ' : ''}${val.toFixed(3)}
+            </td>`;
+        }).join('');
+        
+        return `<tr><td style="font-weight:600;text-align:left">${event.name}</td>${cells}</tr>`;
+    }).join('');
+}
+
+// ============ 事件处理 ============
+
+/**
+ * 时间范围切换
+ */
+function setupTimeRangeSelector() {
+    document.querySelectorAll('.range-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            state.timeRange = btn.dataset.range;
+            renderMainChart();
+        });
+    });
+}
+
+/**
+ * 导航链接高亮
+ */
+function setupNavHighlight() {
+    const sections = document.querySelectorAll('.section');
+    const navLinks = document.querySelectorAll('.nav-link');
+    
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const id = entry.target.id;
+                navLinks.forEach(link => {
+                    link.classList.toggle('active', link.getAttribute('href') === `#${id}`);
+                });
+            }
+        });
+    }, { threshold: 0.3 });
+    
+    sections.forEach(section => observer.observe(section));
+}
+
+/**
+ * 窗口大小变化时重新渲染图表
+ */
+function setupResizeHandler() {
+    let timeout;
+    window.addEventListener('resize', () => {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => {
+            state.mainChart?.resize();
+            state.compareChart?.resize();
+        }, 200);
+    });
+}
+
+// ============ 初始化 ============
+
+/**
+ * 主初始化函数
+ */
+async function init() {
+    try {
+        console.log('正在加载数据...');
+        
+        // 并行加载所有数据
+        const [historyData, latestData, metaData] = await Promise.all([
+            loadJSON('data/indicators.json'),
+            loadJSON('data/latest.json'),
+            loadJSON('data/markets.json'),
+        ]);
+        
+        state.historyData = historyData;
+        state.latestData = latestData;
+        state.metaData = metaData;
+        
+        console.log('数据加载完成');
+        
+        // 渲染页面
+        renderCards();
+        renderIndexSelector();
+        renderMainChart();
+        renderCompareChart();
+        renderSignalsTable();
+        
+        // 设置事件监听
+        setupTimeRangeSelector();
+        setupNavHighlight();
+        setupResizeHandler();
+        
+        // 隐藏加载动画
+        document.getElementById('loading').classList.add('hidden');
+        
+    } catch (error) {
+        console.error('初始化失败:', error);
+        document.getElementById('loading').innerHTML = `
+            <div style="text-align:center;color:#ff1744">
+                <p>数据加载失败</p>
+                <p style="font-size:13px;color:#64748b;margin-top:8px">${error.message}</p>
+                <button onclick="location.reload()" style="margin-top:16px;padding:8px 20px;background:#3b82f6;color:white;border:none;border-radius:8px;cursor:pointer">
+                    重新加载
+                </button>
+            </div>
+        `;
+    }
+}
+
+// 页面加载完成后初始化
+document.addEventListener('DOMContentLoaded', init);

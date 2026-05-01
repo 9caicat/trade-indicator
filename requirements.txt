@@ -1,0 +1,12 @@
+{
+  "diamond_index": {
+    "name": "钻石底指数",
+    "name_en": "Diamond Bottom Index",
+    "description": "基于200日和850日双均线偏离度的底部识别指标，源自韭菜老猫指标的A股适配版本",
+    "formula": "钻石底指数 = (现价 / MA200) × √(现价 / MA850)",
+    "threshold_logic": "钻石底 = 历史5%分位数，过热 = 历史90%分位数，严重过热 = 历史95%分位数",
+    "author": "量化研究部",
+    "version": "1.0",
+    "data_source": "iFinD金融数据平台"
+  }
+}
